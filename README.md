@@ -25,3 +25,6 @@ Ce dashboard interactif analyse les tendances de carrière et les choix de fili�
 
 ## Auteur
 Elhamdani Islam — Étudiant AP1, ENSA Agadir 2025-2026
+
+## Lien de l'application
+👉 https://ensa-career-dashboard.streamlit.app
