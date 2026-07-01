@@ -1,19 +1,28 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from PIL import Image
 
 st.set_page_config(page_title="Dashboard ENSA Agadir", layout="wide")
 
-try:
-    logo = Image.open("logo.png")
-    st.image(logo, width=200)
-except:
-    pass
+SHEET_ID = "1khAfXgb6PQQz16xk4HkXG4wHr_5o2YscR6oHdK-urJg"
 
-st.title("ENSA Agadir — Tableau de bord des tendances de carrière")
-st.write("Bienvenue sur le dashboard des étudiants de l'ENSA Agadir.")
+COLUMN_NAMES = [
+    "Timestamp", "Niveau", "Ambition", "Bac", "Choix1", "Choix2", "Facteur",
+    "Comprehension", "Orientation", "Crainte", "Difficulte", "Filiere_CI",
+    "Premier_Choix", "Correspondance", "Raison", "Outils", "Competence",
+    "Objectif", "SoftSkills", "Projets"
+]
+
+TEXT_COLUMNS = ["Raison", "SoftSkills", "Projets"]
+
+
+# ---------------------------------------------------------------------------
+# DATA LOADING & CLEANING
+# ---------------------------------------------------------------------------
 
 @st.cache_data(ttl=600)
 def load_data():
@@ -21,28 +30,275 @@ def load_data():
     creds_dict = st.secrets["gcp_service_account"]
     creds = ServiceAccountCredentials.from_json_keyfile_dict(dict(creds_dict), scope)
     client = gspread.authorize(creds)
-    sheet = client.open_by_key("1khAfXgb6PQQz16xk4HkXG4wHr_5o2YscR6oHdK-urJg").sheet1
+    sheet = client.open_by_key(SHEET_ID).sheet1
     df = pd.DataFrame(sheet.get_all_records())
-    df.columns = ["Timestamp", "Niveau", "Ambition", "Bac", "Choix1", "Choix2", "Facteur", "Comprehension", "Orientation", "Crainte", "Difficulte", "Filiere_CI", "Premier_Choix", "Correspondance", "Raison", "Outils", "Competences", "Objectif", "SoftSkills", "Projets"]
+    if df.empty:
+        return df
+    df.columns = COLUMN_NAMES
+    return clean_data(df)
+
+
+def clean_data(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize casing/whitespace and handle missing values consistently."""
+    df = df.copy()
+
+    # Strip whitespace on every text column first
+    for col in df.columns:
+        if df[col].dtype == object:
+            df[col] = df[col].astype(str).str.strip()
+
+    # Normalize categorical fields that are prone to inconsistent casing
+    df["Niveau"] = df["Niveau"].str.upper()
+    if "Filiere_CI" in df.columns:
+        df["Filiere_CI"] = df["Filiere_CI"].str.upper()
+
+    # Replace blanks / literal "nan" left over from astype(str) with a clean label
+    df = df.replace(r"^\s*$", "Non spécifié", regex=True)
+    df = df.replace("NAN", "Non spécifié")
+    df = df.fillna("Non spécifié")
+
     return df
 
-df = load_data()
 
-if df.empty:
-    st.warning("Aucune réponse pour le moment. Partagez le formulaire pour collecter des données.")
-else:
-    df = df.fillna("Non spécifié")
-    df = df.replace("", "Non spécifié")
+def try_numeric(series: pd.Series) -> pd.Series:
+    """Best-effort conversion of a Likert-style text column (e.g. '1' to '5') to numeric."""
+    return pd.to_numeric(series, errors="coerce")
 
-    # Sidebar filters
+
+# ---------------------------------------------------------------------------
+# UI SECTIONS
+# ---------------------------------------------------------------------------
+
+def render_header():
+    try:
+        logo = Image.open("logo.png")
+        st.image(logo, width=200)
+    except Exception:
+        pass
+    st.title("ENSA Agadir — Tableau de bord des tendances de carrière")
+    st.write("Bienvenue sur le dashboard des étudiants de l'ENSA Agadir.")
+
+
+def render_sidebar(df: pd.DataFrame) -> pd.DataFrame:
     st.sidebar.header("Filtres")
-    années = ["Toutes"] + sorted(df["Niveau"].unique().tolist())
-    filtre_année = st.sidebar.selectbox("Filtrer par année d'études", années)
-    if filtre_année != "Toutes":
-        df = df[df["Niveau"] == filtre_année]
 
-    st.metric("Total des réponses", len(df))
+    annees = ["Toutes"] + sorted(df["Niveau"].unique().tolist())
+    filtre_annee = st.sidebar.selectbox("Filtrer par année d'études", annees)
+    if filtre_annee != "Toutes":
+        df = df[df["Niveau"] == filtre_annee]
 
+    if "Filiere_CI" in df.columns:
+        filieres = ["Toutes"] + sorted(
+            [f for f in df["Filiere_CI"].unique().tolist() if f != "Non spécifié"]
+        )
+        filtre_filiere = st.sidebar.selectbox("Filtrer par filière (CI)", filieres)
+        if filtre_filiere != "Toutes":
+            df = df[df["Filiere_CI"] == filtre_filiere]
+
+    st.sidebar.header("Recherche par mot-clé")
+    keyword = st.sidebar.text_input("Chercher dans Raison / SoftSkills / Projets")
+    if keyword:
+        mask = False
+        for col in TEXT_COLUMNS:
+            if col in df.columns:
+                mask = mask | df[col].str.contains(keyword, case=False, na=False)
+        df = df[mask]
+        st.sidebar.caption(f"{len(df)} réponse(s) contenant « {keyword} »")
+
+    return df
+
+
+def render_kpis(df: pd.DataFrame):
+    st.header("Indicateurs Clés")
+    c1, c2, c3, c4 = st.columns(4)
+
+    with c1:
+        st.metric("Total des réponses", len(df))
+
+    with c2:
+        comp_numeric = try_numeric(df.get("Comprehension", pd.Series(dtype=object)))
+        avg_comp = comp_numeric.mean()
+        st.metric(
+            "Compréhension moyenne",
+            f"{avg_comp:.1f}" if pd.notna(avg_comp) else "N/A"
+        )
+
+    with c3:
+        ci = df[df["Niveau"] == "CI1"]
+        if not ci.empty and "Premier_Choix" in ci.columns:
+            oui = ci["Premier_Choix"].str.lower().str.startswith("oui").sum()
+            pct = 100 * oui / len(ci)
+            st.metric("1er choix obtenu (CI1)", f"{pct:.0f}%")
+        else:
+            st.metric("1er choix obtenu (CI1)", "N/A")
+
+    with c4:
+        corr_numeric = try_numeric(df.get("Correspondance", pd.Series(dtype=object)))
+        avg_corr = corr_numeric.mean()
+        if pd.notna(avg_corr):
+            st.metric("Indice de satisfaction", f"{avg_corr:.1f}")
+        else:
+            # fall back to a rough satisfaction rate based on "oui"-style answers
+            corr = df.get("Correspondance", pd.Series(dtype=object))
+            oui = corr.str.lower().str.contains("oui", na=False).sum()
+            pct = 100 * oui / len(df) if len(df) else 0
+            st.metric("Indice de satisfaction", f"{pct:.0f}%")
+
+
+def bar(df_counts, title, x_label, y_label="Nombre de réponses"):
+    fig = px.bar(
+        df_counts, x=df_counts.index, y=df_counts.values,
+        labels={"x": x_label, "y": y_label}, title=title
+    )
+    fig.update_layout(showlegend=False, xaxis_tickangle=-30)
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_global_stats(df: pd.DataFrame):
+    st.header("Statistiques Globales")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        bar(df["Niveau"].value_counts(), "Répartition par année d'études", "Niveau")
+    with c2:
+        bar(df["Ambition"].value_counts(), "Ambition professionnelle claire ?", "Ambition")
+
+    bar(df["Bac"].value_counts(), "Filière de baccalauréat", "Bac")
+
+
+def render_prepa_section(df: pd.DataFrame):
+    prepas = df[df["Niveau"].isin(["AP1", "AP2"])]
+    if prepas.empty:
+        return
+
+    st.header("Focus : Cycle Préparatoire (AP)")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        bar(prepas["Choix1"].value_counts(), "1er choix de filière", "Filière")
+    with c2:
+        bar(prepas["Choix2"].value_counts(), "2ème choix de filière", "Filière")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        bar(prepas["Facteur"].value_counts(), "Facteur principal du choix", "Facteur")
+    with c2:
+        bar(prepas["Crainte"].value_counts(), "Craintes concernant la future filière", "Crainte")
+
+
+def render_ci_section(df: pd.DataFrame):
+    ci = df[df["Niveau"] == "CI1"]
+    if ci.empty:
+        return
+
+    st.header("Focus : Cycle Ingénieur (CI)")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        bar(ci["Filiere_CI"].value_counts(), "Filière actuelle", "Filière")
+    with c2:
+        bar(ci["Premier_Choix"].value_counts(), "Cette filière était-elle le 1er choix ?", "Réponse")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        bar(ci["Objectif"].value_counts(), "Objectif de carrière après diplôme", "Objectif")
+    with c2:
+        bar(ci["Outils"].value_counts(), "Logiciels et outils à jour ?", "Réponse")
+
+    bar(ci["Raison"].value_counts(), "Raison si attentes non comblées", "Raison")
+
+
+def render_comparative_analysis(df: pd.DataFrame):
+    """Crainte vs Correspondance: do students who feared certain aspects end up less satisfied?"""
+    if "Crainte" not in df.columns or "Correspondance" not in df.columns:
+        return
+    subset = df[(df["Crainte"] != "Non spécifié") & (df["Correspondance"] != "Non spécifié")]
+    if subset.empty:
+        return
+
+    st.header("Analyse Comparative : Craintes vs Satisfaction")
+    cross = pd.crosstab(subset["Crainte"], subset["Correspondance"])
+    fig = px.bar(
+        cross, barmode="group",
+        labels={"value": "Nombre de réponses", "Crainte": "Crainte initiale"},
+        title="Correspondance aux attentes, par crainte initiale"
+    )
+    fig.update_layout(xaxis_tickangle=-30)
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption(
+        "Ce graphique révèle si les étudiants ayant exprimé une crainte particulière "
+        "ont ensuite déclaré une satisfaction plus faible."
+    )
+
+
+def render_sankey(df: pd.DataFrame):
+    """Bac -> Filiere_CI flow diagram."""
+    ci = df[(df["Niveau"] == "CI1") & (df["Bac"] != "Non spécifié") & (df["Filiere_CI"] != "Non spécifié")]
+    if ci.empty:
+        return
+
+    st.header("Parcours Bac → Filière d'ingénieur")
+
+    bacs = sorted(ci["Bac"].unique())
+    filieres = sorted(ci["Filiere_CI"].unique())
+    labels = bacs + filieres
+    bac_idx = {b: i for i, b in enumerate(bacs)}
+    fil_idx = {f: i + len(bacs) for i, f in enumerate(filieres)}
+
+    flow = ci.groupby(["Bac", "Filiere_CI"]).size().reset_index(name="count")
+    sources = flow["Bac"].map(bac_idx)
+    targets = flow["Filiere_CI"].map(fil_idx)
+    values = flow["count"]
+
+    fig = go.Figure(data=[go.Sankey(
+        node=dict(pad=15, thickness=15, label=labels),
+        link=dict(source=sources, target=targets, value=values)
+    )])
+    fig.update_layout(title_text="Flux des étudiants : Bac d'origine → Filière actuelle", height=500)
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption("Répond à la question : les étudiants d'un Bac donné se dirigent-ils vers une filière spécifique ?")
+
+
+def render_persona(df: pd.DataFrame):
+    st.header("Profil Type d'un Étudiant")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        niveau = st.selectbox("Niveau", sorted(df["Niveau"].unique().tolist()), key="persona_niveau")
+    subset = df[df["Niveau"] == niveau]
+
+    filiere = None
+    if niveau == "CI1" and "Filiere_CI" in df.columns:
+        options = sorted([f for f in subset["Filiere_CI"].unique() if f != "Non spécifié"])
+        if options:
+            with c2:
+                filiere = st.selectbox("Filière", options, key="persona_filiere")
+            subset = subset[subset["Filiere_CI"] == filiere]
+
+    if subset.empty:
+        st.info("Aucune donnée pour ce profil.")
+        return
+
+    def mode_or_na(col):
+        if col not in subset.columns:
+            return "N/A"
+        vals = subset[col][subset[col] != "Non spécifié"]
+        return vals.mode().iloc[0] if not vals.empty else "N/A"
+
+    label = f"{niveau}" + (f" — {filiere}" if filiere else "")
+    st.markdown(f"**Profil type : {label}** *(n={len(subset)})*")
+
+    if niveau == "CI1":
+        st.write(f"- Objectif de carrière le plus fréquent : **{mode_or_na('Objectif')}**")
+        st.write(f"- Correspondance typique aux attentes : **{mode_or_na('Correspondance')}**")
+        st.write(f"- Outils/compétences : **{mode_or_na('Outils')}**")
+    else:
+        st.write(f"- 1er choix de filière le plus fréquent : **{mode_or_na('Choix1')}**")
+        st.write(f"- Facteur principal du choix : **{mode_or_na('Facteur')}**")
+        st.write(f"- Crainte la plus fréquente : **{mode_or_na('Crainte')}**")
+
+
+def render_download(df: pd.DataFrame):
     csv = df.to_csv(index=False).encode("utf-8")
     st.download_button(
         label="Télécharger les données en CSV",
@@ -51,82 +307,34 @@ else:
         mime="text/csv"
     )
 
-    # --- STATISTIQUES GLOBALES ---
-    st.header("Statistiques Globales")
 
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("Répartition par année d'études")
-        st.bar_chart(df["Niveau"].value_counts())
-    with c2:
-        st.subheader("Ambition professionnelle claire ?")
-        st.bar_chart(df["Ambition"].value_counts())
+# ---------------------------------------------------------------------------
+# MAIN
+# ---------------------------------------------------------------------------
 
-    st.subheader("Filière de baccalauréat")
-    st.bar_chart(df["Bac"].value_counts())
+def main():
+    render_header()
+    df = load_data()
 
-    # --- CYCLE PRÉPARATOIRE ---
-    prepas = df[df["Niveau"].isin(["AP1", "AP2"])]
-    if not prepas.empty:
-        st.header("Focus : Cycle Préparatoire (AP)")
+    if df.empty:
+        st.warning("Aucune réponse pour le moment. Partagez le formulaire pour collecter des données.")
+        return
 
-        c1, c2 = st.columns(2)
-        with c1:
-            st.subheader("1er choix de filière")
-            st.bar_chart(prepas["Choix1"].value_counts())
-        with c2:
-            st.subheader("2ème choix de filière")
-            st.bar_chart(prepas["Choix2"].value_counts())
+    df = render_sidebar(df)
 
-        c1, c2 = st.columns(2)
-        with c1:
-            st.subheader("Facteur principal du choix")
-            st.bar_chart(prepas["Facteur"].value_counts())
-        with c2:
-            st.subheader("Craintes concernant la future filière")
-            st.bar_chart(prepas["Crainte"].value_counts())
+    if df.empty:
+        st.info("Aucune réponse ne correspond aux filtres sélectionnés.")
+        return
 
-        c1, c2 = st.columns(2)
-        with c1:
-            st.subheader("Compréhension du programme (1-5)")
-            st.bar_chart(prepas["Comprehension"].value_counts().sort_index())
-        with c2:
-            st.subheader("ENSA fournit assez d'informations ?")
-            st.bar_chart(prepas["Orientation"].value_counts())
+    render_download(df)
+    render_kpis(df)
+    render_global_stats(df)
+    render_prepa_section(df)
+    render_ci_section(df)
+    render_comparative_analysis(df)
+    render_sankey(df)
+    render_persona(df)
 
-    # --- CYCLE INGÉNIEUR ---
-    ci = df[df["Niveau"] == "CI1"]
-    if not ci.empty:
-        st.header("Focus : Cycle Ingénieur (CI)")
 
-        c1, c2 = st.columns(2)
-        with c1:
-            st.subheader("Filière actuelle")
-            st.bar_chart(ci["Filiere_CI"].value_counts())
-        with c2:
-            st.subheader("Cette filière était-elle le 1er choix ?")
-            st.bar_chart(ci["Premier_Choix"].value_counts())
-
-        c1, c2 = st.columns(2)
-        with c1:
-            st.subheader("Objectif de carrière après diplôme")
-            st.bar_chart(ci["Objectif"].value_counts())
-        with c2:
-            st.subheader("Logiciels et outils à jour ?")
-            st.bar_chart(ci["Outils"].value_counts())
-
-        c1, c2 = st.columns(2)
-        with c1:
-            st.subheader("Correspondance attentes/réalité (1-5)")
-            st.bar_chart(ci["Correspondance"].value_counts().sort_index())
-        with c2:
-            st.subheader("Raison si attentes non comblées")
-            st.bar_chart(ci["Raison"].value_counts())
-
-        c1, c2 = st.columns(2)
-        with c1:
-            st.subheader("Évaluation soft skills (1-5)")
-            st.bar_chart(ci["SoftSkills"].value_counts().sort_index())
-        with c2:
-            st.subheader("Pertinence des projets pratiques (1-5)")
-            st.bar_chart(ci["Projets"].value_counts().sort_index())
+if __name__ == "__main__":
+    main()
