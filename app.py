@@ -31,9 +31,8 @@ if df.empty:
 else:
     df = df.fillna("Non spécifié")
     df = df.replace("", "Non spécifié")
-    df.columns = [str(c).strip() for c in df.columns]
     col = df.columns.tolist()
-
+    df.columns = ["Timestamp" , "Niveau" , "Ambition" , "Bac" , "Choix1" , "Choix2" , "Facteur" , "Comprehension" , "Orientation" , "Crainte" , "Difficulte" , "Filiere_CI" , "Premier_Choix" , "Correspondance" , "Raison" , "Attentes" , "Outils" , "Competences" , "Objectif" , "Softskills" , "Projets"]
     # Sidebar filters
     st.sidebar.header("Filtres")
     années = ["Toutes"] + sorted(df[col[1]].unique().tolist())
