@@ -31,6 +31,7 @@ if df.empty:
 else:
     df = df.fillna("Non spécifié")
     df = df.replace("", "Non spécifié")
+    df.columns = [str(c).strip() for c in df.columns]
     col = df.columns.tolist()
 
     # Sidebar filters
