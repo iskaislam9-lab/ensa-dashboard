@@ -10,14 +10,48 @@ st.set_page_config(page_title="Dashboard ENSA Agadir", layout="wide")
 
 SHEET_ID = "1khAfXgb6PQQz16xk4HkXG4wHr_5o2YscR6oHdK-urJg"
 
-COLUMN_NAMES = [
-    "Timestamp", "Niveau", "Ambition", "Bac", "Choix1", "Choix2", "Facteur",
-    "Comprehension", "Orientation", "Crainte", "Difficulte", "Filiere_CI",
-    "Premier_Choix", "Correspondance", "Raison", "Outils", "Competence",
-    "Objectif", "SoftSkills", "Projets"
-]
+# Map the REAL Google Form question text (as it appears as a column header
+# in the Sheet) to a short internal name used everywhere else in this app.
+# ⚠️ CHECK EVERY LINE against your actual Sheet header row before running —
+# a mismatched key just gets silently dropped (see clean_data's warning below).
+COLUMN_MAP = {
+    "Horodateur": "Timestamp",
+    "Année d'études :": "Niveau",
+    "Avez-vous déjà une ambition professionnelle claire?": "Ambition",
+    "Quelle est votre filière de baccalauréat ?": "Bac",
 
-TEXT_COLUMNS = ["Raison", "SoftSkills", "Projets"]
+    # --- Section Parcours Préparatoire (AP1/AP2) ---
+    "Si vous deviez choisir votre filière aujourd'hui, quelle serait votre 1er choix ?": "Choix1",
+    "Quel serait votre 2e choix ?": "Choix2",
+    "Quel est le facteur principal qui influence votre 1er choix ?": "Facteur",
+    "Sur une échelle de 1 à 5, dans quelle mesure comprenez-vous le contenu et les modules de votre 1er choix ?": "Comprehension",
+    "Estimez-vous que l'ENSA d'Agadir fournit assez d'informations pour vous aider à choisir ?": "Orientation",
+    "Quelle est votre plus grande crainte concernant votre future filière ?": "Crainte",
+    "Avez-vous déjà regardé des offres de stage ou des descriptions de postes liées à votre 1er choix de filière ?": "Stages_Regardes",
+    "Si oui, quelle compétence vous semble la plus difficile à apprendre par vous-même ?": "Competence_Difficile",
+
+    # --- Section Cycle Ingénieur (CI1/CI2/CI3) ---
+    "Quelle est votre filière actuelle ?": "Filiere_CI",
+    "Cette filière était-elle votre 1er choix lors de votre année en AP2 ?": "Premier_Choix",
+    "Sur une échelle de 1 à 5, la réalité de cette filière correspond-elle aux attentes que vous aviez en AP2?": "Correspondance",
+    "Si les attentes ne sont pas comblées, quelle en est la raison principale ?": "Raison",
+    "Estimez-vous que les logiciels et outils enseignés sont à jour par rapport au marché du travail actuel ?": "Outils",
+    "Quelle compétence technique, logiciel ou technologie souhaiteriez-vous voir intégrer ou approfondir dans votre filière ?": "Competence",
+    "Quel est votre objectif de carrière principal après l'obtention de votre diplôme ?": "Objectif",
+    "Comment évaluez-vous la formation aux \"soft skills\" (communication, gestion, leadership) au sein de votre filière ?": "SoftSkills",
+    "Si vous deviez noter la pertinence des projets pratiques réalisés en cours par rapport aux besoins réels d'une entreprise, quelle note donneriez-vous (1-5) ?": "Projets",
+    "Quel est le facteur principal qui a influencé votre choix de filière ?": "Facteur_CI",
+    "Si vous pouviez revenir en AP2, referiez-vous le même choix de filière ?": "Regret",
+}
+
+TEXT_COLUMNS = ["Raison", "SoftSkills", "Projets", "Competence", "Competence_Difficile"]
+
+# Questions where 5 = best outcome (understanding, orientation, expectations met,
+# soft skills quality, project relevance) — used to sanity-check scale direction.
+SCALE_5_IS_BEST = ["Comprehension", "Correspondance", "SoftSkills", "Projets"]
+
+CI_LEVELS = ["CI1", "CI2", "CI3"]
+AP_LEVELS = ["AP1", "AP2"]
 
 
 # ---------------------------------------------------------------------------
@@ -34,25 +68,34 @@ def load_data():
     df = pd.DataFrame(sheet.get_all_records())
     if df.empty:
         return df
-    df.columns = COLUMN_NAMES
     return clean_data(df)
 
 
 def clean_data(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalize casing/whitespace and handle missing values consistently."""
+    """Rename real Sheet headers to internal names, then normalize values."""
     df = df.copy()
 
-    # Strip whitespace on every text column first
+    # Rename by matching real header text — anything not in COLUMN_MAP is left
+    # as-is (so a form edit you forgot to add here shows up under its raw
+    # question text instead of silently vanishing).
+    unmapped = [c for c in df.columns if c not in COLUMN_MAP]
+    if unmapped:
+        st.sidebar.warning(
+            "Colonnes non reconnues (à ajouter dans COLUMN_MAP) :\n- "
+            + "\n- ".join(unmapped)
+        )
+    df = df.rename(columns=COLUMN_MAP)
+
+    # Strip whitespace on every text column
     for col in df.columns:
         if df[col].dtype == object:
             df[col] = df[col].astype(str).str.strip()
 
-    # Normalize categorical fields that are prone to inconsistent casing
-    df["Niveau"] = df["Niveau"].str.upper()
+    if "Niveau" in df.columns:
+        df["Niveau"] = df["Niveau"].str.upper()
     if "Filiere_CI" in df.columns:
         df["Filiere_CI"] = df["Filiere_CI"].str.upper()
 
-    # Replace blanks / literal "nan" left over from astype(str) with a clean label
     df = df.replace(r"^\s*$", "Non spécifié", regex=True)
     df = df.replace("NAN", "Non spécifié")
     df = df.fillna("Non spécifié")
@@ -61,7 +104,6 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def try_numeric(series: pd.Series) -> pd.Series:
-    """Best-effort conversion of a Likert-style text column (e.g. '1' to '5') to numeric."""
     return pd.to_numeric(series, errors="coerce")
 
 
@@ -96,9 +138,9 @@ def render_sidebar(df: pd.DataFrame) -> pd.DataFrame:
             df = df[df["Filiere_CI"] == filtre_filiere]
 
     st.sidebar.header("Recherche par mot-clé")
-    keyword = st.sidebar.text_input("Chercher dans Raison / SoftSkills / Projets")
+    keyword = st.sidebar.text_input("Chercher dans Raison / SoftSkills / Projets / Compétence")
     if keyword:
-        mask = False
+        mask = pd.Series(False, index=df.index)
         for col in TEXT_COLUMNS:
             if col in df.columns:
                 mask = mask | df[col].str.contains(keyword, case=False, na=False)
@@ -124,21 +166,20 @@ def render_kpis(df: pd.DataFrame):
         )
 
     with c3:
-        ci = df[df["Niveau"] == "CI1"]
+        ci = df[df["Niveau"].isin(CI_LEVELS)]
         if not ci.empty and "Premier_Choix" in ci.columns:
             oui = ci["Premier_Choix"].str.lower().str.startswith("oui").sum()
             pct = 100 * oui / len(ci)
-            st.metric("1er choix obtenu (CI1)", f"{pct:.0f}%")
+            st.metric("1er choix obtenu (CI)", f"{pct:.0f}%")
         else:
-            st.metric("1er choix obtenu (CI1)", "N/A")
+            st.metric("1er choix obtenu (CI)", "N/A")
 
     with c4:
         corr_numeric = try_numeric(df.get("Correspondance", pd.Series(dtype=object)))
         avg_corr = corr_numeric.mean()
         if pd.notna(avg_corr):
-            st.metric("Indice de satisfaction", f"{avg_corr:.1f}")
+            st.metric("Indice de satisfaction", f"{avg_corr:.1f} / 5")
         else:
-            # fall back to a rough satisfaction rate based on "oui"-style answers
             corr = df.get("Correspondance", pd.Series(dtype=object))
             oui = corr.str.lower().str.contains("oui", na=False).sum()
             pct = 100 * oui / len(df) if len(df) else 0
@@ -167,7 +208,7 @@ def render_global_stats(df: pd.DataFrame):
 
 
 def render_prepa_section(df: pd.DataFrame):
-    prepas = df[df["Niveau"].isin(["AP1", "AP2"])]
+    prepas = df[df["Niveau"].isin(AP_LEVELS)]
     if prepas.empty:
         return
 
@@ -185,13 +226,16 @@ def render_prepa_section(df: pd.DataFrame):
     with c2:
         bar(prepas["Crainte"].value_counts(), "Craintes concernant la future filière", "Crainte")
 
+    if "Stages_Regardes" in prepas.columns:
+        bar(prepas["Stages_Regardes"].value_counts(), "Ont déjà regardé des offres de stage ?", "Réponse")
+
 
 def render_ci_section(df: pd.DataFrame):
-    ci = df[df["Niveau"] == "CI1"]
+    ci = df[df["Niveau"].isin(CI_LEVELS)]
     if ci.empty:
         return
 
-    st.header("Focus : Cycle Ingénieur (CI)")
+    st.header("Focus : Cycle Ingénieur (CI1/CI2/CI3)")
 
     c1, c2 = st.columns(2)
     with c1:
@@ -204,6 +248,9 @@ def render_ci_section(df: pd.DataFrame):
         bar(ci["Objectif"].value_counts(), "Objectif de carrière après diplôme", "Objectif")
     with c2:
         bar(ci["Outils"].value_counts(), "Logiciels et outils à jour ?", "Réponse")
+
+    if "Regret" in ci.columns:
+        bar(ci["Regret"].value_counts(), "Referaient le même choix ?", "Réponse")
 
     bar(ci["Raison"].value_counts(), "Raison si attentes non comblées", "Raison")
 
@@ -233,7 +280,7 @@ def render_comparative_analysis(df: pd.DataFrame):
 
 def render_sankey(df: pd.DataFrame):
     """Bac -> Filiere_CI flow diagram."""
-    ci = df[(df["Niveau"] == "CI1") & (df["Bac"] != "Non spécifié") & (df["Filiere_CI"] != "Non spécifié")]
+    ci = df[df["Niveau"].isin(CI_LEVELS) & (df["Bac"] != "Non spécifié") & (df["Filiere_CI"] != "Non spécifié")]
     if ci.empty:
         return
 
@@ -268,7 +315,7 @@ def render_persona(df: pd.DataFrame):
     subset = df[df["Niveau"] == niveau]
 
     filiere = None
-    if niveau == "CI1" and "Filiere_CI" in df.columns:
+    if niveau in CI_LEVELS and "Filiere_CI" in df.columns:
         options = sorted([f for f in subset["Filiere_CI"].unique() if f != "Non spécifié"])
         if options:
             with c2:
@@ -288,7 +335,7 @@ def render_persona(df: pd.DataFrame):
     label = f"{niveau}" + (f" — {filiere}" if filiere else "")
     st.markdown(f"**Profil type : {label}** *(n={len(subset)})*")
 
-    if niveau == "CI1":
+    if niveau in CI_LEVELS:
         st.write(f"- Objectif de carrière le plus fréquent : **{mode_or_na('Objectif')}**")
         st.write(f"- Correspondance typique aux attentes : **{mode_or_na('Correspondance')}**")
         st.write(f"- Outils/compétences : **{mode_or_na('Outils')}**")
