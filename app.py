@@ -65,9 +65,30 @@ def load_data():
     creds = ServiceAccountCredentials.from_json_keyfile_dict(dict(creds_dict), scope)
     client = gspread.authorize(creds)
     sheet = client.open_by_key(SHEET_ID).sheet1
-    df = pd.DataFrame(sheet.get_all_records())
-    if df.empty:
-        return df
+
+    # Read raw values instead of get_all_records(): get_all_records() raises
+    # if the header row has blank or duplicate cells, which happens easily
+    # with a branching Google Form (e.g. two sections reusing similar wording).
+    values = sheet.get_all_values()
+    if len(values) < 2:
+        return pd.DataFrame()
+
+    headers = values[0]
+    rows = values[1:]
+
+    # De-duplicate / fill blank headers so pandas doesn't collapse columns
+    seen = {}
+    clean_headers = []
+    for h in headers:
+        h = h.strip() if h.strip() else "Colonne_vide"
+        if h in seen:
+            seen[h] += 1
+            h = f"{h}_{seen[h]}"
+        else:
+            seen[h] = 0
+        clean_headers.append(h)
+
+    df = pd.DataFrame(rows, columns=clean_headers)
     return clean_data(df)
 
 
