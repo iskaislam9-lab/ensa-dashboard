@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import gspread
+import re
 from oauth2client.service_account import ServiceAccountCredentials
 from PIL import Image
 
@@ -92,20 +93,31 @@ def load_data():
     return clean_data(df)
 
 
+def normalize_header(h: str) -> str:
+    """Make header comparison tolerant of curly quotes, non-breaking spaces, etc."""
+    h = h.replace("’", "'").replace("‘", "'")
+    h = h.replace("\u00a0", " ")  # non-breaking space
+    h = re.sub(r"\s+", " ", h).strip()
+    return h
+
+
 def clean_data(df: pd.DataFrame) -> pd.DataFrame:
     """Rename real Sheet headers to internal names, then normalize values."""
     df = df.copy()
 
-    # Rename by matching real header text — anything not in COLUMN_MAP is left
-    # as-is (so a form edit you forgot to add here shows up under its raw
-    # question text instead of silently vanishing).
-    unmapped = [c for c in df.columns if c not in COLUMN_MAP]
+    # Normalize both the Sheet's real headers and the COLUMN_MAP keys before
+    # comparing, so invisible differences (curly apostrophes, non-breaking
+    # spaces, double spaces) don't cause a false "unrecognized column".
+    normalized_map = {normalize_header(k): v for k, v in COLUMN_MAP.items()}
+    df.columns = [normalize_header(c) for c in df.columns]
+
+    unmapped = [c for c in df.columns if c not in normalized_map]
     if unmapped:
         st.sidebar.warning(
             "Colonnes non reconnues (à ajouter dans COLUMN_MAP) :\n- "
             + "\n- ".join(unmapped)
         )
-    df = df.rename(columns=COLUMN_MAP)
+    df = df.rename(columns=normalized_map)
 
     # Strip whitespace on every text column
     for col in df.columns:
