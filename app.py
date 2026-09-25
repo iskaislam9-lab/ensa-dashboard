@@ -27,8 +27,8 @@ COLUMN_MAP = {
     "Sur une échelle de 1 à 5, dans quelle mesure comprenez-vous le contenu et les modules de votre 1er choix ?": "Comprehension",
     "Estimez-vous que l'ENSA d'Agadir fournit assez d'informations pour vous aider à choisir ?": "Orientation",
     "Quelle est votre plus grande crainte concernant votre future filière ?": "Crainte",
-    "Avez-vous déjà regardé des offres de stage ou des descriptions de postes liées à votre 1er choix de filière ?": "Stages_Regardes",
-    "Si oui, quelle compétence vous semble la plus difficile à apprendre par vous-même ?": "Competence_Difficile",
+    "Avez-vous déjà commencé à regarder des offres de stages ou des descriptions de postes liées à votre 1er choix de filière ?": "Stages_Regardes",
+    "Qu'est-ce qui vous semble le plus difficile à apprendre (le skill) par vous-même?": "Competence_Difficile",
 
     # --- Section Cycle Ingénieur (CI1/CI2/CI3) ---
     "Quelle est votre filière actuelle ?": "Filiere_CI",
@@ -40,7 +40,7 @@ COLUMN_MAP = {
     "Quel est votre objectif de carrière principal après l'obtention de votre diplôme ?": "Objectif",
     "Comment évaluez-vous la formation aux \"soft skills\" (communication, gestion, leadership) au sein de votre filière ?": "SoftSkills",
     "Si vous deviez noter la pertinence des projets pratiques réalisés en cours par rapport aux besoins réels d'une entreprise, quelle note donneriez-vous (1-5) ?": "Projets",
-    "Quel est le facteur principal qui a influencé votre choix de filière ?": "Facteur_CI",
+    "Quel est le facteur principal qui a influencé votre 1er choix ?": "Facteur_CI",
     "Si vous pouviez revenir en AP2, referiez-vous le même choix de filière ?": "Regret",
 }
 
